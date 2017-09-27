@@ -19,8 +19,8 @@ class Node
 {
 public:
   Node(Py::list &labels):labels(labels),class_num(Py::len(labels)), loss(INFINITY){};
-  Node(Py::numeric::array &A, Py::list &L, int class_num);
-  Node(const Node &){throw -1;};
+  Node(Py::numeric::array &A, Py::list &L, int class_num, float leaf_th=1.);
+  Node(const Node &){throw "self-copy is not allowed";};
 //  int cur_level;
 //  int max_level;
   int feature_idx;           //  the dimemsion targeted by this node
@@ -35,7 +35,8 @@ public:
   float loss;
   Py::list labels;  // if this node is not the leaf then, it has many labels. if not single label
   float threshold;
-//  std::vector<float> 
+  float leaf_th; // node whose purity bigger than this value will be set as a leaf with the tag of the current class
+//  std::vector<float>
   std::auto_ptr<Node> left_ptr;
   std::auto_ptr<Node> right_ptr;
 
@@ -55,6 +56,7 @@ private:
   std::auto_ptr<float> label_R_cnt_ptr;   //  pre-allocate for calc_loss
   std::auto_ptr<float> label_L_cnt_ptr;
 
+
   std::auto_ptr<float> loss_R_cnt_ptr;  // always stores the count related to the current min loss, for set_tags()
   std::auto_ptr<float> loss_L_cnt_ptr;
 
@@ -65,10 +67,12 @@ private:
 
 
 
-Node::Node(Py::numeric::array &A, Py::list &L, int class_num):loss(INFINITY),class_num(class_num)
+Node::Node(Py::numeric::array &A, Py::list &L, int class_num, float leaf_th):loss(INFINITY),class_num(class_num),leaf_th(leaf_th)
 {
   /*
       since data has been got, train it.
+      L:
+        list indicates which samples are validate
   */
   Py::tuple shape = Py::extract<Py::tuple>(A.attr("shape"));
   feature_dims = Py::extract<int>(shape[0])-1;
@@ -102,7 +106,7 @@ void Node::train()
 //      LOG(INFO) << "passing sample_i";
       th_tmp = Py::extract<float>( (*sample_array_ptr)[Py::make_tuple(dim_i, sample_i)] ) ;
       loss_tmp = calc_loss(th_tmp, dim_i);
-      
+//      std::cout<<"line["<<__LINE__<<"]:sample_i: "<<sample_i<<" loss: "<<loss_tmp<< std::endl;
       if (loss_tmp < loss)// record
       {
         loss = loss_tmp;
@@ -155,12 +159,17 @@ float Node::calc_loss(float th, int dim_i)
   }
 //  float loss_l, loss_r;
 //  loss_l = loss_r=0.;
- float loss_loc=0.;
+  float loss_loc=0.;
+//  std::cout<<"left count: "<<label_L_cnt<<", right count: "<<label_R_cnt<<std::endl;
   /*
         USE entropy
   */
   for(int class_i=0; class_i < class_num;++class_i)
   {
+/*    std::cout<<"["<<__LINE__<<"]"<<"th: "<<th<<", class: "<<class_i<<",  left-count: "<<
+        label_L_cnt_ptr.get()[class_i] <<"right-count: "<<
+        label_R_cnt_ptr.get()[class_i]<<std::endl;
+*/
     if (label_L_cnt_ptr.get()[class_i] > postive_zero)
       loss_loc += -label_L_cnt_ptr.get()[class_i] *log(label_L_cnt_ptr.get()[class_i]) ;
     if (label_R_cnt_ptr.get()[class_i] > postive_zero)
@@ -205,11 +214,29 @@ void Node::set_tags()
 
   
   Py::list left_labels_tmp, right_labels_tmp;
+///  std::cout<<"leaf threshold: "<<leaf_th<<std::endl;
   for(int i=0; i<class_num;++i)
   {
+/*    std::cout<<"["<<__LINE__<<"]"<<"th: "<<leaf_th<<", class: "<<i<<",  left-count: "<<
+        loss_L_cnt_ptr.get()[i] <<"right-count: "<<
+        loss_R_cnt_ptr.get()[i]<<std::endl;
+*/
+
+    if (loss_L_cnt_ptr.get()[i] > leaf_th)// mono leaf
+    {
+//      std::cout<<"mono-left"<<std::endl;
+      left_labels_tmp.append(i);
+      continue;
+    }
+    if(loss_R_cnt_ptr.get()[i] > leaf_th)
+    {
+//      std::cout<<"mono-right"<<std::endl;
+      right_labels_tmp.append(i);
+      continue;
+    }
     if (loss_L_cnt_ptr.get()[i] > postive_zero)// push into left
       left_labels_tmp.append(i);
-    else
+    if (loss_R_cnt_ptr.get()[i] > postive_zero) // there are also some sample in the right
       right_labels_tmp.append(i);
 
   }
@@ -231,6 +258,7 @@ BOOST_PYTHON_MODULE(node_test)
   class_<Node>("Node",init<Node &>())
   .def(init<Py::list &> ())
   .def(init<Py::numeric::array &,Py::list & , int>())
+  .def(init<Py::numeric::array &,Py::list & , int, float >())
 
   .def("train",&Node::train)
   .def("predict", &Node::predict)
@@ -239,12 +267,14 @@ BOOST_PYTHON_MODULE(node_test)
   .def_readwrite("sample_array",&Node::sample_array_ptr)
   .def_readwrite("sample_list",&Node::sample_list_ptr)
   .def_readwrite("class_num",&Node::class_num)
- .def_readonly("threshold",&Node::threshold)
 
+ .def_readonly("threshold",&Node::threshold)
   .def_readonly("loss",&Node::loss)
   .def_readonly("feature_idx",&Node::feature_idx)
   .def_readonly("labels",&Node::labels)
   .def_readonly("right_labels", &Node::right_labels)
-  .def_readonly("left_labels", &Node::left_labels);
+  .def_readonly("left_labels", &Node::left_labels)
+  .def_readonly("leaf_th", &Node::leaf_th);
+
 }
 
